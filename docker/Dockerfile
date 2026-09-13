@@ -6,25 +6,54 @@
 ######## Build the frontend
 FROM --platform=${BUILDPLATFORM} node AS frontendbuild
 WORKDIR /go/src/github.com/analogj/scrutiny
-COPY --link . /go/src/github.com/analogj/scrutiny
+COPY --link Makefile /go/src/github.com/analogj/scrutiny/
+COPY --link webapp/frontend /go/src/github.com/analogj/scrutiny/webapp/frontend
 
 RUN make binary-frontend
 
 
 ######## Build the backend
-FROM golang:1.20-bookworm as backendbuild
+FROM golang:1.25-trixie as backendbuild
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /go/src/github.com/analogj/scrutiny
-COPY --link . /go/src/github.com/analogj/scrutiny
+COPY --link Makefile /go/src/github.com/analogj/scrutiny/
+COPY --link go.mod go.sum /go/src/github.com/analogj/scrutiny/
+COPY --link collector /go/src/github.com/analogj/scrutiny/collector
+COPY --link webapp/backend /go/src/github.com/analogj/scrutiny/webapp/backend
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
     file \
     && rm -rf /var/lib/apt/lists/*
-RUN make binary-clean binary-all WEB_BINARY_NAME=scrutiny
+# this stage isn't pinned to --platform=$BUILDPLATFORM, so buildx already runs it
+# natively/emulated per target platform; GOOS/GOARCH here only feed the version
+# banner's ldflags (main.goos/main.goarch), not cross-compilation. Both binary
+# names are pinned too, since the Makefile appends -$(GOOS)-$(GOARCH) to whichever
+# one isn't already overridden on the command line, which would break the COPY
+# --from=backendbuild steps below
+RUN make binary-clean binary-all WEB_BINARY_NAME=scrutiny COLLECTOR_BINARY_NAME=scrutiny-collector-metrics GOOS=$TARGETOS GOARCH=$TARGETARCH
+
+
+######## Build smartmontools from source
+FROM debian:trixie-slim AS smartmontoolsbuild
+ARG SMARTMONTOOLS_VER=7.5
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends \
+    ca-certificates curl gcc g++ gnupg make \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -L "https://github.com/smartmontools/smartmontools/releases/download/RELEASE_$(echo ${SMARTMONTOOLS_VER} | tr '.' '_')/smartmontools-${SMARTMONTOOLS_VER}.tar.gz" -o /tmp/smartmontools.tar.gz \
+    && tar -xzf /tmp/smartmontools.tar.gz -C /tmp \
+    && cd /tmp/smartmontools-${SMARTMONTOOLS_VER} \
+    && ./configure --prefix=/usr LDFLAGS='-static' --without-libcap-ng --without-libsystemd \
+    && make -j"$(nproc)" \
+    && make install \
+    && /usr/sbin/update-smart-drivedb \
+    && rm -rf /tmp/smartmontools*
 
 
 ######## Combine build artifacts in runtime image
-FROM debian:bookworm-slim as runtime
+FROM debian:trixie-slim AS runtime
 ARG TARGETARCH
 EXPOSE 8080
 WORKDIR /opt/scrutiny
@@ -40,7 +69,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
     ca-certificates \
     cron \
     curl \
-    smartmontools \
     tzdata \
     procps \
     xz-utils \
@@ -62,12 +90,16 @@ RUN curl -L https://dl.influxdata.com/influxdb/releases/influxdb2-${INFLUXVER}-$
 
 COPY /rootfs /
 
+COPY --from=smartmontoolsbuild /usr/sbin/smartctl /usr/sbin/smartctl
+COPY --from=smartmontoolsbuild /usr/share/smartmontools/ /usr/share/smartmontools/
+
 COPY --link --from=backendbuild --chmod=755 /go/src/github.com/analogj/scrutiny/scrutiny /opt/scrutiny/bin/
 COPY --link --from=backendbuild --chmod=755 /go/src/github.com/analogj/scrutiny/scrutiny-collector-metrics /opt/scrutiny/bin/
 COPY --link --from=frontendbuild --chmod=644 /go/src/github.com/analogj/scrutiny/dist /opt/scrutiny/web
 RUN chmod 0644 /etc/cron.d/scrutiny && \
     rm -f /etc/cron.daily/* && \
     mkdir -p /opt/scrutiny/web && \
+    chmod -R a+rX /opt/scrutiny/web && \
     mkdir -p /opt/scrutiny/config && \
     chmod -R ugo+rwx /opt/scrutiny/config && \
     chmod +x /etc/cont-init.d/* && \

@@ -2,15 +2,16 @@ package config
 
 import (
 	"fmt"
-	"github.com/analogj/go-util/utils"
-	"github.com/analogj/scrutiny/collector/pkg/errors"
-	"github.com/analogj/scrutiny/collector/pkg/models"
-	"github.com/mitchellh/mapstructure"
-	"github.com/spf13/viper"
 	"log"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/analogj/go-util/utils"
+	"github.com/analogj/scrutiny/collector/pkg/errors"
+	"github.com/analogj/scrutiny/collector/pkg/models"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/spf13/viper"
 )
 
 // When initializing this class the following methods must be called:
@@ -47,8 +48,16 @@ func (c *configuration) Init() error {
 	c.SetDefault("commands.metrics_scan_args", "--scan --json")
 	c.SetDefault("commands.metrics_info_args", "--info --json")
 	c.SetDefault("commands.metrics_smart_args", "--xall --json")
+	c.SetDefault("commands.metrics_smartctl_wait", 0)
+
+	//configure env variable parsing.
+	c.SetEnvPrefix("COLLECTOR")
+	c.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
+	c.AutomaticEnv()
 
 	//c.SetDefault("collect.short.command", "-a -o on -S on")
+
+	c.SetDefault("allow_listed_devices", []string{})
 
 	//if you want to load a non-standard location system config file (~/drawbridge.yml), use ReadConfig
 	c.SetConfigType("yaml")
@@ -155,34 +164,53 @@ func (c *configuration) GetDeviceOverrides() []models.ScanOverride {
 	return c.deviceOverrides
 }
 
-func (c *configuration) GetCommandMetricsInfoArgs(deviceName string) string {
-	overrides := c.GetDeviceOverrides()
-
-	for _, deviceOverrides := range overrides {
-		if strings.ToLower(deviceName) == strings.ToLower(deviceOverrides.Device) {
-			//found matching device
-			if len(deviceOverrides.Commands.MetricsInfoArgs) > 0 {
-				return deviceOverrides.Commands.MetricsInfoArgs
-			} else {
-				return c.GetString("commands.metrics_info_args")
-			}
+func (c *configuration) getDeviceOverride(deviceName string) (models.ScanOverride, bool) {
+	//device files are matched case-insensitively, and the first entry for a device wins.
+	for _, deviceOverride := range c.GetDeviceOverrides() {
+		if strings.EqualFold(deviceName, deviceOverride.Device) {
+			return deviceOverride, true
 		}
 	}
+
+	return models.ScanOverride{}, false
+}
+
+// HasDeviceTypeOverride reports whether the device type was set in the config
+// file, rather than coming from smartctl --scan.
+func (c *configuration) HasDeviceTypeOverride(deviceName string) bool {
+	deviceOverride, found := c.getDeviceOverride(deviceName)
+
+	return found && len(deviceOverride.DeviceType) > 0
+}
+
+func (c *configuration) GetCommandMetricsInfoArgs(deviceName string) string {
+	if deviceOverride, found := c.getDeviceOverride(deviceName); found && len(deviceOverride.Commands.MetricsInfoArgs) > 0 {
+		return deviceOverride.Commands.MetricsInfoArgs
+	}
+
 	return c.GetString("commands.metrics_info_args")
 }
 
 func (c *configuration) GetCommandMetricsSmartArgs(deviceName string) string {
-	overrides := c.GetDeviceOverrides()
+	if deviceOverride, found := c.getDeviceOverride(deviceName); found && len(deviceOverride.Commands.MetricsSmartArgs) > 0 {
+		return deviceOverride.Commands.MetricsSmartArgs
+	}
 
-	for _, deviceOverrides := range overrides {
-		if strings.ToLower(deviceName) == strings.ToLower(deviceOverrides.Device) {
-			//found matching device
-			if len(deviceOverrides.Commands.MetricsSmartArgs) > 0 {
-				return deviceOverrides.Commands.MetricsSmartArgs
-			} else {
-				return c.GetString("commands.metrics_smart_args")
-			}
+	return c.GetString("commands.metrics_smart_args")
+}
+
+func (c *configuration) IsAllowlistedDevice(deviceName string) bool {
+	allowList := c.GetStringSlice("allow_listed_devices")
+	if len(allowList) == 0 {
+		return true
+	}
+
+	for _, item := range allowList {
+		// matched case-insensitively, like the device overrides
+		if strings.EqualFold(item, deviceName) {
+			return true
 		}
 	}
-	return c.GetString("commands.metrics_smart_args")
+
+	return false
 }

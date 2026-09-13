@@ -1,10 +1,11 @@
 package database
 
 import (
-	mock_config "github.com/analogj/scrutiny/webapp/backend/pkg/config/mock"
-	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	mock_config "github.com/analogj/scrutiny/webapp/backend/pkg/config/mock"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func Test_DownsampleScript_Weekly(t *testing.T) {
@@ -12,7 +13,6 @@ func Test_DownsampleScript_Weekly(t *testing.T) {
 
 	//setup
 	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 	fakeConfig := mock_config.NewMockInterface(mockCtrl)
 	fakeConfig.EXPECT().GetString("web.influxdb.bucket").Return("metrics").AnyTimes()
 	fakeConfig.EXPECT().GetString("web.influxdb.org").Return("scrutiny").AnyTimes()
@@ -43,20 +43,19 @@ destOrg = "scrutiny"
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "smart" )
-|> group(columns: ["device_wwn", "_field"])
+|> group(columns: ["scrutiny_uuid", "_field"])
 |> aggregateWindow(every: aggWindow, fn: last, createEmpty: false)
 |> to(bucket: destBucket, org: destOrg)
 
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "temp")
-|> group(columns: ["device_wwn"])
+|> group(columns: ["scrutiny_uuid"])
 |> toInt()
 |> aggregateWindow(fn: mean, every: aggWindow, createEmpty: false)
 |> set(key: "_measurement", value: "temp")
 |> set(key: "_field", value: "temp")
-|> to(bucket: destBucket, org: destOrg)
-		`, influxDbScript)
+|> to(bucket: destBucket, org: destOrg)`, influxDbScript)
 }
 
 func Test_DownsampleScript_Monthly(t *testing.T) {
@@ -64,7 +63,6 @@ func Test_DownsampleScript_Monthly(t *testing.T) {
 
 	//setup
 	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 	fakeConfig := mock_config.NewMockInterface(mockCtrl)
 	fakeConfig.EXPECT().GetString("web.influxdb.bucket").Return("metrics").AnyTimes()
 	fakeConfig.EXPECT().GetString("web.influxdb.org").Return("scrutiny").AnyTimes()
@@ -95,20 +93,19 @@ destOrg = "scrutiny"
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "smart" )
-|> group(columns: ["device_wwn", "_field"])
+|> group(columns: ["scrutiny_uuid", "_field"])
 |> aggregateWindow(every: aggWindow, fn: last, createEmpty: false)
 |> to(bucket: destBucket, org: destOrg)
 
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "temp")
-|> group(columns: ["device_wwn"])
+|> group(columns: ["scrutiny_uuid"])
 |> toInt()
 |> aggregateWindow(fn: mean, every: aggWindow, createEmpty: false)
 |> set(key: "_measurement", value: "temp")
 |> set(key: "_field", value: "temp")
-|> to(bucket: destBucket, org: destOrg)
-		`, influxDbScript)
+|> to(bucket: destBucket, org: destOrg)`, influxDbScript)
 }
 
 func Test_DownsampleScript_Yearly(t *testing.T) {
@@ -116,7 +113,6 @@ func Test_DownsampleScript_Yearly(t *testing.T) {
 
 	//setup
 	mockCtrl := gomock.NewController(t)
-	defer mockCtrl.Finish()
 	fakeConfig := mock_config.NewMockInterface(mockCtrl)
 	fakeConfig.EXPECT().GetString("web.influxdb.bucket").Return("metrics").AnyTimes()
 	fakeConfig.EXPECT().GetString("web.influxdb.org").Return("scrutiny").AnyTimes()
@@ -147,18 +143,17 @@ destOrg = "scrutiny"
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "smart" )
-|> group(columns: ["device_wwn", "_field"])
+|> group(columns: ["scrutiny_uuid", "_field"])
 |> aggregateWindow(every: aggWindow, fn: last, createEmpty: false)
 |> to(bucket: destBucket, org: destOrg)
 
 from(bucket: sourceBucket)
 |> range(start: rangeStart, stop: rangeEnd)
 |> filter(fn: (r) => r["_measurement"] == "temp")
-|> group(columns: ["device_wwn"])
+|> group(columns: ["scrutiny_uuid"])
 |> toInt()
 |> aggregateWindow(fn: mean, every: aggWindow, createEmpty: false)
 |> set(key: "_measurement", value: "temp")
 |> set(key: "_field", value: "temp")
-|> to(bucket: destBucket, org: destOrg)
-		`, influxDbScript)
+|> to(bucket: destBucket, org: destOrg)`, influxDbScript)
 }

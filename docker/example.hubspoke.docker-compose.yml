@@ -1,8 +1,7 @@
-version: '2.4'
-
 services:
   influxdb:
-    image: influxdb:2.2
+    restart: unless-stopped
+    image: influxdb:2.8
     ports:
       - '8086:8086'
     volumes:
@@ -15,7 +14,8 @@ services:
 
 
   web:
-    image: 'ghcr.io/analogj/scrutiny:master-web'
+    restart: unless-stopped
+    image: 'ghcr.io/analogj/scrutiny:nightly-web'
     ports:
       - '8080:8080'
     volumes:
@@ -33,7 +33,8 @@ services:
       start_period: 10s
 
   collector:
-    image: 'ghcr.io/analogj/scrutiny:master-collector'
+    restart: unless-stopped
+    image: 'ghcr.io/analogj/scrutiny:nightly-collector'
     cap_add:
       - SYS_RAWIO
     volumes:
@@ -41,6 +42,9 @@ services:
     environment:
       COLLECTOR_API_ENDPOINT: 'http://web:8080'
       COLLECTOR_HOST_ID: 'scrutiny-collector-hostname'
+      # If true forces the collector to run on startup (cron will be started after the collector completes)
+      # see: https://github.com/AnalogJ/scrutiny/blob/master/docs/TROUBLESHOOTING_DEVICE_COLLECTOR.md#collector-trigger-on-startup
+      COLLECTOR_RUN_STARTUP: false
     depends_on:
       web:
         condition: service_healthy

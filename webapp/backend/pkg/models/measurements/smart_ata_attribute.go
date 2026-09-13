@@ -91,7 +91,7 @@ func (sa *SmartAtaAttribute) Inflate(key string, val interface{}) {
 	}
 }
 
-//populate attribute status, using SMART Thresholds & Observed Metadata
+// populate attribute status, using SMART Thresholds & Observed Metadata
 // Chainable
 func (sa *SmartAtaAttribute) PopulateAttributeStatus() *SmartAtaAttribute {
 	if strings.ToUpper(sa.WhenFailed) == pkg.AttributeWhenFailedFailingNow {
@@ -136,9 +136,9 @@ func (sa *SmartAtaAttribute) ValidateThreshold(smartMetadata thresholds.AtaAttri
 
 	for _, obsThresh := range smartMetadata.ObservedThresholds {
 
-		//check if "value" is in this bucket
-		if ((obsThresh.Low == obsThresh.High) && value == obsThresh.Low) ||
-			(obsThresh.Low < value && value <= obsThresh.High) {
+		//check if "value" is in this bucket. Bounds are inclusive on both ends; since the first
+		//matching bucket wins, a value on a shared edge still lands in the earlier bucket.
+		if obsThresh.Low <= value && value <= obsThresh.High {
 			sa.FailureRate = obsThresh.AnnualFailureRate
 
 			if smartMetadata.Critical {
@@ -165,6 +165,4 @@ func (sa *SmartAtaAttribute) ValidateThreshold(smartMetadata thresholds.AtaAttri
 		sa.Status = pkg.AttributeStatusSet(sa.Status, pkg.AttributeStatusWarningScrutiny)
 		sa.StatusReason = "Could not determine Observed Failure Rate for Critical Attribute"
 	}
-
-	return
 }

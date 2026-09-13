@@ -8,8 +8,8 @@ import (
 	reflect "reflect"
 
 	models "github.com/analogj/scrutiny/collector/pkg/models"
-	gomock "github.com/golang/mock/gomock"
 	viper "github.com/spf13/viper"
+	gomock "go.uber.org/mock/gomock"
 )
 
 // MockInterface is a mock of Interface interface.
@@ -161,6 +161,20 @@ func (mr *MockInterfaceMockRecorder) GetStringSlice(key interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStringSlice", reflect.TypeOf((*MockInterface)(nil).GetStringSlice), key)
 }
 
+// HasDeviceTypeOverride mocks base method.
+func (m *MockInterface) HasDeviceTypeOverride(deviceName string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasDeviceTypeOverride", deviceName)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// HasDeviceTypeOverride indicates an expected call of HasDeviceTypeOverride.
+func (mr *MockInterfaceMockRecorder) HasDeviceTypeOverride(deviceName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasDeviceTypeOverride", reflect.TypeOf((*MockInterface)(nil).HasDeviceTypeOverride), deviceName)
+}
+
 // Init mocks base method.
 func (m *MockInterface) Init() error {
 	m.ctrl.T.Helper()
@@ -173,6 +187,20 @@ func (m *MockInterface) Init() error {
 func (mr *MockInterfaceMockRecorder) Init() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Init", reflect.TypeOf((*MockInterface)(nil).Init))
+}
+
+// IsAllowlistedDevice mocks base method.
+func (m *MockInterface) IsAllowlistedDevice(deviceName string) bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsAllowlistedDevice", deviceName)
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsAllowlistedDevice indicates an expected call of IsAllowlistedDevice.
+func (mr *MockInterfaceMockRecorder) IsAllowlistedDevice(deviceName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsAllowlistedDevice", reflect.TypeOf((*MockInterface)(nil).IsAllowlistedDevice), deviceName)
 }
 
 // IsSet mocks base method.

@@ -1,5 +1,7 @@
 package collector
 
+import "encoding/json"
+
 type SmartInfo struct {
 	JSONFormatVersion []int `json:"json_format_version"`
 	Smartctl          struct {
@@ -67,6 +69,7 @@ type SmartInfo struct {
 	SmartStatus struct {
 		Passed bool `json:"passed"`
 	} `json:"smart_status"`
+	SmartSupport SmartSupport `json:"smart_support"`
 
 	PowerOnTime struct {
 		Hours int64 `json:"hours"`
@@ -143,21 +146,21 @@ type SmartInfo struct {
 				ErrorNumber         int `json:"error_number"`
 				LifetimeHours       int `json:"lifetime_hours"`
 				CompletionRegisters struct {
-					Error  int `json:"error"`
-					Status int `json:"status"`
-					Count  int `json:"count"`
-					Lba    int `json:"lba"`
-					Device int `json:"device"`
+					Error  int    `json:"error"`
+					Status int    `json:"status"`
+					Count  int    `json:"count"`
+					Lba    uint64 `json:"lba"`
+					Device int    `json:"device"`
 				} `json:"completion_registers"`
 				ErrorDescription string `json:"error_description"`
 				PreviousCommands []struct {
 					Registers struct {
-						Command       int `json:"command"`
-						Features      int `json:"features"`
-						Count         int `json:"count"`
-						Lba           int `json:"lba"`
-						Device        int `json:"device"`
-						DeviceControl int `json:"device_control"`
+						Command       int    `json:"command"`
+						Features      int    `json:"features"`
+						Count         int    `json:"count"`
+						Lba           uint64 `json:"lba"`
+						Device        int    `json:"device"`
+						DeviceControl int    `json:"device_control"`
 					} `json:"registers"`
 					PowerupMilliseconds int    `json:"powerup_milliseconds"`
 					CommandName         string `json:"command_name"`
@@ -188,8 +191,8 @@ type SmartInfo struct {
 	AtaSmartSelectiveSelfTestLog struct {
 		Revision int `json:"revision"`
 		Table    []struct {
-			LbaMin int `json:"lba_min"`
-			LbaMax int `json:"lba_max"`
+			LbaMin uint64 `json:"lba_min"`
+			LbaMax uint64 `json:"lba_max"`
 			Status struct {
 				Value  int    `json:"value"`
 				String string `json:"string"`
@@ -207,10 +210,10 @@ type SmartInfo struct {
 		ID          int `json:"id"`
 		SubsystemID int `json:"subsystem_id"`
 	} `json:"nvme_pci_vendor"`
-	NvmeIeeeOuiIdentifier  int   `json:"nvme_ieee_oui_identifier"`
-	NvmeTotalCapacity      int64 `json:"nvme_total_capacity"`
-	NvmeControllerID       int   `json:"nvme_controller_id"`
-	NvmeNumberOfNamespaces int   `json:"nvme_number_of_namespaces"`
+	NvmeIeeeOuiIdentifier  uint32 `json:"nvme_ieee_oui_identifier"`
+	NvmeTotalCapacity      int64  `json:"nvme_total_capacity"`
+	NvmeControllerID       int    `json:"nvme_controller_id"`
+	NvmeNumberOfNamespaces int    `json:"nvme_number_of_namespaces"`
 	NvmeNamespaces         []struct {
 		ID   int `json:"id"`
 		Size struct {
@@ -226,6 +229,10 @@ type SmartInfo struct {
 			Bytes  int64 `json:"bytes"`
 		} `json:"utilization"`
 		FormattedLbaSize int `json:"formatted_lba_size"`
+		Eui64            struct {
+			Oui   uint32 `json:"oui"`
+			ExtId uint64 `json:"ext_id"`
+		} `json:"eui64"`
 	} `json:"nvme_namespaces"`
 	NvmeSmartHealthInformationLog NvmeSmartHealthInformationLog `json:"nvme_smart_health_information_log"`
 
@@ -235,6 +242,38 @@ type SmartInfo struct {
 	ScsiVersion         string              `json:"scsi_version"`
 	ScsiGrownDefectList int64               `json:"scsi_grown_defect_list"`
 	ScsiErrorCounterLog ScsiErrorCounterLog `json:"scsi_error_counter_log"`
+}
+
+type SmartSupport struct {
+	Available bool `json:"available"`
+	Enabled   bool `json:"enabled"`
+}
+
+func (s *SmartSupport) UnmarshalJSON(data []byte) error {
+	// smartctl changed smart_support from a legacy boolean to an object with
+	// separate available/enabled fields. Accept both shapes so collectors keep
+	// reporting support correctly across smartctl versions.
+	var supported bool
+	if err := json.Unmarshal(data, &supported); err == nil {
+		s.Available = supported
+		s.Enabled = supported
+		return nil
+	}
+
+	var support struct {
+		Available bool `json:"available"`
+		Enabled   bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &support); err != nil {
+		return err
+	}
+	s.Available = support.Available
+	s.Enabled = support.Enabled
+	return nil
+}
+
+func (s SmartSupport) Supported() bool {
+	return s.Available && s.Enabled
 }
 
 // Capacity finds the total capacity of the device in bytes, or 0 if unknown.

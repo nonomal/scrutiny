@@ -19,9 +19,10 @@ import (
 	"github.com/analogj/scrutiny/webapp/backend/pkg/models"
 	"github.com/analogj/scrutiny/webapp/backend/pkg/models/measurements"
 	"github.com/analogj/scrutiny/webapp/backend/pkg/thresholds"
-	"github.com/containrrr/shoutrrr"
-	shoutrrrTypes "github.com/containrrr/shoutrrr/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/nicholas-fedor/shoutrrr"
+	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
+	"github.com/gofrs/uuid/v5"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -32,7 +33,7 @@ const NotifyFailureTypeSmartFailure = "SmartFailure"
 const NotifyFailureTypeScrutinyFailure = "ScrutinyFailure"
 
 // ShouldNotify check if the error Message should be filtered (level mismatch or filtered_attributes)
-func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs measurements.Smart, statusThreshold pkg.MetricsStatusThreshold, statusFilterAttributes pkg.MetricsStatusFilterAttributes, repeatNotifications bool, c *gin.Context, deviceRepo database.DeviceRepo) bool {
+func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs measurements.Smart, scrutiny_uuid uuid.UUID, statusThreshold pkg.MetricsStatusThreshold, statusFilterAttributes pkg.MetricsStatusFilterAttributes, repeatNotifications bool, c *gin.Context, deviceRepo database.DeviceRepo) bool {
 	// 1. check if the device is healthy
 	if device.DeviceStatus == pkg.DeviceStatusPassed {
 		return false
@@ -64,7 +65,7 @@ func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs me
 	var failingAttributes []string
 	// Loop through the attributes to find the failing ones
 	for attrId, attrData := range smartAttrs.Attributes {
-		var status pkg.AttributeStatus = attrData.GetStatus()
+		var status = attrData.GetStatus()
 		// Skip over passing attributes
 		if status == pkg.AttributeStatusPassed {
 			continue
@@ -100,7 +101,7 @@ func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs me
 	var lastPoints []measurements.Smart
 	var err error
 	if !repeatNotifications {
-		lastPoints, err = deviceRepo.GetSmartAttributeHistory(c, c.Param("wwn"), database.DURATION_KEY_FOREVER, 1, 1, failingAttributes)
+		lastPoints, err = deviceRepo.GetSmartAttributeHistory(c, scrutiny_uuid, database.DURATION_KEY_FOREVER, 1, 1, failingAttributes)
 		if err == nil || len(lastPoints) < 1 {
 			logger.Warningln("Could not get the most recent data points from the database. This is expected to happen only if this is the very first submission of data for the device.")
 		}
@@ -147,7 +148,7 @@ func NewPayload(device models.Device, test bool, currentTime ...time.Time) Paylo
 
 	//validate that the Payload is populated
 	var sendDate time.Time
-	if currentTime != nil && len(currentTime) > 0 {
+	if len(currentTime) > 0 {
 		sendDate = currentTime[0]
 	} else {
 		sendDate = time.Now()
@@ -318,7 +319,7 @@ func (n *Notify) SendScriptNotification(scriptUrl string) error {
 
 	if !utils.FileExists(scriptPath) {
 		n.Logger.Errorf("Script does not exist: %s", scriptPath)
-		return errors.New(fmt.Sprintf("custom script path does not exist: %s", scriptPath))
+		return fmt.Errorf("custom script path does not exist: %s", scriptPath)
 	}
 
 	copyEnv := os.Environ()
@@ -424,6 +425,17 @@ func (n *Notify) GenShoutrrrNotificationParams(shoutrrrUrl string) (string, *sho
 	case "telegram":
 		(*params)["title"] = subject
 	case "zulip":
+		query := serviceURL.Query()
+		urlTopic := query["topic"]
+		delete(query, "topic")
+		if len(urlTopic) > 0 && urlTopic[len(urlTopic)-1] != "" {
+			subject = urlTopic[len(urlTopic)-1]
+		}
+		subjectRunes := []rune(subject)
+		if len(subjectRunes) > 60 {
+			n.Logger.Warningf("Zulip notification subject too long (%d characters), truncating to 60 characters", len(subjectRunes))
+			subject = string(subjectRunes[:60])
+		}
 		(*params)["topic"] = subject
 	}
 

@@ -5,18 +5,21 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"time"
+
 	"github.com/analogj/scrutiny/webapp/backend/pkg/config"
 	"github.com/analogj/scrutiny/webapp/backend/pkg/models"
 	"github.com/glebarez/sqlite"
+	"github.com/gofrs/uuid/v5"
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/influxdata/influxdb-client-go/v2/domain"
 	"github.com/sirupsen/logrus"
+
 	"gorm.io/gorm"
-	"io/ioutil"
-	"net/http"
-	"net/url"
-	"time"
 )
 
 const (
@@ -29,6 +32,7 @@ const (
 	// 60seconds * 60minutes * 24hours * 7 days * (52 + 52 + 4)weeks
 	RETENTION_PERIOD_25_MONTHS_IN_SECONDS = 65_318_400
 
+	DURATION_KEY_DAY     = "day"
 	DURATION_KEY_WEEK    = "week"
 	DURATION_KEY_MONTH   = "month"
 	DURATION_KEY_YEAR    = "year"
@@ -82,7 +86,7 @@ func NewScrutinyRepository(appConfig config.Interface, globalLogger logrus.Field
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Failed to connect to database! - %v", err)
+		return nil, fmt.Errorf("failed to connect to database! - %v", err)
 	}
 	globalLogger.Infof("Successfully connected to scrutiny sqlite db: %s\n", appConfig.GetString("web.database.location"))
 
@@ -146,7 +150,7 @@ func NewScrutinyRepository(appConfig config.Interface, globalLogger logrus.Field
 	taskAPI := client.TasksAPI()
 
 	if writeAPI == nil || queryAPI == nil || taskAPI == nil {
-		return nil, fmt.Errorf("Failed to connect to influxdb!")
+		return nil, fmt.Errorf("failed to connect to influxdb")
 	}
 
 	deviceRepo := scrutinyRepository{
@@ -238,13 +242,13 @@ func InfluxSetupComplete(influxEndpoint string, tlsConfig *tls.Config) (bool, er
 		return false, err
 	}
 
-    client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}
 	res, err := client.Get(influxUri.String())
 	if err != nil {
 		return false, err
 	}
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
 		return false, err
 	}
@@ -331,16 +335,16 @@ func (sr *scrutinyRepository) EnsureBuckets(ctx context.Context, org *domain.Org
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // get a map of all devices and associated SMART data
-func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*models.DeviceSummary, error) {
+func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[uuid.UUID]*models.DeviceSummary, error) {
 	devices, err := sr.GetDevices(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	summaries := map[string]*models.DeviceSummary{}
+	summaries := map[uuid.UUID]*models.DeviceSummary{}
 
 	for _, device := range devices {
-		summaries[device.WWN] = &models.DeviceSummary{Device: device}
+		summaries[device.ScrutinyUUID] = &models.DeviceSummary{Device: device}
 	}
 
 	// Get parser flux query result
@@ -355,7 +359,7 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 	|> filter(fn: (r) => r["_field"] == "temp" or r["_field"] == "power_on_hours" or r["_field"] == "date")
 	|> last()
 	|> schema.fieldsAsCols()
-	|> group(columns: ["device_wwn"])
+	|> group(columns: ["scrutiny_uuid"])
 	
 	weeklyData = from(bucket: bucketBaseName + "_weekly")
 	|> range(start: -10y, stop: now())
@@ -363,7 +367,7 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 	|> filter(fn: (r) => r["_field"] == "temp" or r["_field"] == "power_on_hours" or r["_field"] == "date")
 	|> last()
 	|> schema.fieldsAsCols()
-	|> group(columns: ["device_wwn"])
+	|> group(columns: ["scrutiny_uuid"])
 	
 	monthlyData = from(bucket: bucketBaseName + "_monthly")
 	|> range(start: -10y, stop: now())
@@ -371,7 +375,7 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 	|> filter(fn: (r) => r["_field"] == "temp" or r["_field"] == "power_on_hours" or r["_field"] == "date")
 	|> last()
 	|> schema.fieldsAsCols()
-	|> group(columns: ["device_wwn"])
+	|> group(columns: ["scrutiny_uuid"])
 	
 	yearlyData = from(bucket: bucketBaseName + "_yearly")
 	|> range(start: -10y, stop: now())
@@ -379,12 +383,12 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 	|> filter(fn: (r) => r["_field"] == "temp" or r["_field"] == "power_on_hours" or r["_field"] == "date")
 	|> last()
 	|> schema.fieldsAsCols()
-	|> group(columns: ["device_wwn"])
+	|> group(columns: ["scrutiny_uuid"])
 	
 	union(tables: [dailyData, weeklyData, monthlyData, yearlyData])
 	|> sort(columns: ["_time"], desc: false)
-	|> group(columns: ["device_wwn"])
-	|> last(column: "device_wwn")
+	|> group(columns: ["scrutiny_uuid"])
+	|> last(column: "scrutiny_uuid")
 	|> yield(name: "last")
 		`,
 		sr.appConfig.GetString("web.influxdb.bucket"),
@@ -402,14 +406,15 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 
 			//get summary data from Influxdb.
 			//result.Record().Values()
-			if deviceWWN, ok := result.Record().Values()["device_wwn"]; ok {
+			if scrutinyUUIDString, ok := result.Record().Values()["scrutiny_uuid"]; ok {
+				scrutinyUUID := uuid.Must(uuid.FromString(scrutinyUUIDString.(string)))
 
-				//ensure summaries is intialized for this wwn
-				if _, exists := summaries[deviceWWN.(string)]; !exists {
-					summaries[deviceWWN.(string)] = &models.DeviceSummary{}
+				//ensure summaries is intialized for this scrutiny_uuid
+				if _, exists := summaries[scrutinyUUID]; !exists {
+					summaries[scrutinyUUID] = &models.DeviceSummary{}
 				}
 
-				summaries[deviceWWN.(string)].SmartResults = &models.SmartSummary{
+				summaries[scrutinyUUID].SmartResults = &models.SmartSummary{
 					Temp:          result.Record().Values()["temp"].(int64),
 					PowerOnHours:  result.Record().Values()["power_on_hours"].(int64),
 					CollectorDate: result.Record().Values()["_time"].(time.Time),
@@ -432,8 +437,8 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 		sr.logger.Printf("========================>>>>>>>>======================")
 		sr.logger.Printf("Error: %v", err)
 	}
-	for wwn, tempHistory := range deviceTempHistory {
-		summaries[wwn].TempHistory = tempHistory
+	for scutiny_uuid, tempHistory := range deviceTempHistory {
+		summaries[scutiny_uuid].TempHistory = tempHistory
 	}
 
 	return summaries, nil
@@ -445,6 +450,7 @@ func (sr *scrutinyRepository) GetSummary(ctx context.Context) (map[string]*model
 
 func (sr *scrutinyRepository) lookupBucketName(durationKey string) string {
 	switch durationKey {
+	case DURATION_KEY_DAY:
 	case DURATION_KEY_WEEK:
 		//data stored in the last week
 		return sr.appConfig.GetString("web.influxdb.bucket")
@@ -462,8 +468,10 @@ func (sr *scrutinyRepository) lookupBucketName(durationKey string) string {
 }
 
 func (sr *scrutinyRepository) lookupDuration(durationKey string) []string {
-
 	switch durationKey {
+	case DURATION_KEY_DAY:
+		//data stored in the last day
+		return []string{"-1d", "now()"}
 	case DURATION_KEY_WEEK:
 		//data stored in the last week
 		return []string{"-1w", "now()"}
@@ -480,8 +488,22 @@ func (sr *scrutinyRepository) lookupDuration(durationKey string) []string {
 	return []string{"-1w", "now()"}
 }
 
+func (sr *scrutinyRepository) lookupResolution(durationKey string) string {
+	switch durationKey {
+	case DURATION_KEY_DAY:
+		// Return data with higher resolution for daily summaries
+		return "10m"
+	default:
+		// Return data with 1h resolution for other summaries
+		return "1h"
+	}
+}
+
 func (sr *scrutinyRepository) lookupNestedDurationKeys(durationKey string) []string {
 	switch durationKey {
+	case DURATION_KEY_DAY:
+		//all data is stored in a single bucket, but we want a finer resolution
+		return []string{DURATION_KEY_DAY}
 	case DURATION_KEY_WEEK:
 		//all data is stored in a single bucket
 		return []string{DURATION_KEY_WEEK}

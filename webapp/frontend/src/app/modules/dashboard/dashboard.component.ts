@@ -32,8 +32,9 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
     summaryData: { [key: string]: DeviceSummaryModel };
     hostGroups: { [hostId: string]: string[] } = {}
     temperatureOptions: ApexOptions;
-    tempDurationKey = 'forever'
+    tempDurationKey = 'week'
     config: AppConfig;
+    showArchived: boolean;
 
     // Private
     private _unsubscribeAll: Subject<void>;
@@ -99,10 +100,10 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
                 this.summaryData = data;
 
                 // generate group data.
-                for (const wwn in this.summaryData) {
-                    const hostid = this.summaryData[wwn].device.host_id
+                for (const scrutiny_uuid in this.summaryData) {
+                    const hostid = this.summaryData[scrutiny_uuid].device.host_id
                     const hostDeviceList = this.hostGroups[hostid] || []
-                    hostDeviceList.push(wwn)
+                    hostDeviceList.push(scrutiny_uuid)
                     this.hostGroups[hostid] = hostDeviceList
                 }
                 console.log(this.hostGroups)
@@ -144,8 +145,8 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
 
         console.log('DEVICE DATA SUMMARY', this.summaryData)
 
-        for (const wwn in this.summaryData) {
-            const deviceSummary = this.summaryData[wwn]
+        for (const scrutiny_uuid in this.summaryData) {
+            const deviceSummary = this.summaryData[scrutiny_uuid]
             if (!deviceSummary.temp_history) {
                 continue
             }
@@ -159,9 +160,18 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
 
             for(const tempHistory of deviceSummary.temp_history){
                 const newDate = new Date(tempHistory.date);
+                let temperature;
+                switch (this.config.temperature_unit) {
+                    case 'celsius':
+                        temperature = tempHistory.temp;
+                        break
+                    case 'fahrenheit':
+                        temperature = TemperaturePipe.celsiusToFahrenheit(tempHistory.temp)
+                        break
+                }
                 deviceSeriesMetadata.data.push({
                     x: newDate,
-                    y: TemperaturePipe.formatTemperature(tempHistory.temp, this.config.temperature_unit, false)
+                    y: temperature
                 })
             }
             deviceTemperatureSeries.push(deviceSeriesMetadata)
@@ -206,6 +216,8 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
             },
             tooltip: {
                 theme: 'dark',
+                shared: true,
+                intersect: false,
                 x    : {
                     format: 'MMM dd, yyyy HH:mm:ss'
                 },
@@ -217,7 +229,10 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
                 }
             },
             xaxis: {
-                type: 'datetime'
+                type: 'datetime',
+                labels: {
+                    datetimeUTC: false
+                }
             }
         };
     }
@@ -226,14 +241,22 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
     // @ Public methods
     // -----------------------------------------------------------------------------------------------------
 
-    deviceSummariesForHostGroup(hostGroupWWNs: string[]): DeviceSummaryModel[] {
+    deviceSummariesForHostGroup(hostGroupScrutinyUUIDs: string[]): DeviceSummaryModel[] {
         const deviceSummaries: DeviceSummaryModel[] = []
-        for (const wwn of hostGroupWWNs) {
-            if (this.summaryData[wwn]) {
-                deviceSummaries.push(this.summaryData[wwn])
+        for (const scrutiny_uuid of hostGroupScrutinyUUIDs) {
+            if (this.summaryData[scrutiny_uuid]) {
+                deviceSummaries.push(this.summaryData[scrutiny_uuid])
             }
         }
         return deviceSummaries
+    }
+
+    isDeviceVisible(deviceSummary: DeviceSummaryModel): boolean {
+        return this.showArchived || !deviceSummary.device.archived
+    }
+
+    hostGroupHasVisibleDevices(hostGroupScrutinyUUIDs: string[]): boolean {
+        return this.deviceSummariesForHostGroup(hostGroupScrutinyUUIDs).some(deviceSummary => this.isDeviceVisible(deviceSummary))
     }
 
     openDialog(): void {
@@ -244,16 +267,24 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
         });
     }
 
-    onDeviceDeleted(wwn: string): void {
-        delete this.summaryData[wwn] // remove the device from the summary list.
+    onDeviceDeleted(scrutiny_uuid: string): void {
+        delete this.summaryData[scrutiny_uuid] // remove the device from the summary list.
+    }
+
+    onDeviceArchived(scrutiny_uuid: string): void {
+        this.summaryData[scrutiny_uuid].device.archived = true;
+    }
+
+    onDeviceUnarchived(scrutiny_uuid: string): void {
+        this.summaryData[scrutiny_uuid].device.archived = false;
     }
 
     /*
-
+    DURATION_KEY_DAY    = "day"
     DURATION_KEY_WEEK    = "week"
-	DURATION_KEY_MONTH   = "month"
-	DURATION_KEY_YEAR    = "year"
-	DURATION_KEY_FOREVER = "forever"
+    DURATION_KEY_MONTH   = "month"
+    DURATION_KEY_YEAR    = "year"
+    DURATION_KEY_FOREVER = "forever"
      */
 
     changeSummaryTempDuration(durationKey: string): void {
@@ -263,9 +294,9 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy
             .subscribe((tempHistoryData) => {
 
                 // given a list of device temp history, override the data in the "summary" object.
-                for (const wwn in this.summaryData) {
-                    // console.log(`Updating ${wwn}, length: ${this.data.data.summary[wwn].temp_history.length}`)
-                    this.summaryData[wwn].temp_history = tempHistoryData[wwn] || []
+                for (const scrutiny_uuid in this.summaryData) {
+                    // console.log(`Updating ${scrutiny_uuid}, length: ${this.data.data.summary[scrutiny_uuid].temp_history.length}`)
+                    this.summaryData[scrutiny_uuid].temp_history = tempHistoryData[scrutiny_uuid] || []
                 }
 
                 // Prepare the chart series data

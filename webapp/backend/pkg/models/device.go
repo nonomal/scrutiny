@@ -1,9 +1,11 @@
 package models
 
 import (
+	"time"
+
 	"github.com/analogj/scrutiny/webapp/backend/pkg"
 	"github.com/analogj/scrutiny/webapp/backend/pkg/models/collector"
-	"time"
+	"github.com/gofrs/uuid/v5"
 )
 
 type DeviceWrapper struct {
@@ -14,11 +16,12 @@ type DeviceWrapper struct {
 
 type Device struct {
 	//GORM attributes, see: http://gorm.io/docs/conventions.html
+	Archived  bool `json:"archived"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
 
-	WWN string `json:"wwn" gorm:"primary_key"`
+	WWN string `json:"wwn"`
 
 	DeviceName     string `json:"device_name"`
 	DeviceUUID     string `json:"device_uuid"`
@@ -44,6 +47,7 @@ type Device struct {
 
 	// Data set by Scrutiny
 	DeviceStatus pkg.DeviceStatus `json:"device_status"`
+	ScrutinyUUID uuid.UUID        `json:"scrutiny_uuid" gorm:"primaryKey;uniqueIndex"`
 }
 
 func (dv *Device) IsAta() bool {
@@ -164,10 +168,6 @@ func (dv *Device) IsNvme() bool {
 func (dv *Device) UpdateFromCollectorSmartInfo(info collector.SmartInfo) error {
 	dv.Firmware = info.FirmwareVersion
 	dv.DeviceProtocol = info.Device.Protocol
-
-	if !info.SmartStatus.Passed {
-		dv.DeviceStatus = pkg.DeviceStatusSet(dv.DeviceStatus, pkg.DeviceStatusFailedSmart)
-	}
 
 	return nil
 }

@@ -3,18 +3,20 @@ package database
 import (
 	"context"
 	"fmt"
-	"github.com/analogj/scrutiny/webapp/backend/pkg/models/collector"
-	"github.com/analogj/scrutiny/webapp/backend/pkg/models/measurements"
-	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"strings"
 	"time"
+
+	"github.com/analogj/scrutiny/webapp/backend/pkg/models/collector"
+	"github.com/analogj/scrutiny/webapp/backend/pkg/models/measurements"
+	"github.com/gofrs/uuid/v5"
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 )
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Temperature Data
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-func (sr *scrutinyRepository) SaveSmartTemperature(ctx context.Context, wwn string, deviceProtocol string, collectorSmartData collector.SmartInfo) error {
-	if len(collectorSmartData.AtaSctTemperatureHistory.Table) > 0 {
+// //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+func (sr *scrutinyRepository) SaveSmartTemperature(ctx context.Context, scrutiny_uuid uuid.UUID, deviceProtocol string, collectorSmartData collector.SmartInfo, discardSCTTempHistory bool) error {
+	if len(collectorSmartData.AtaSctTemperatureHistory.Table) > 0 && !discardSCTTempHistory {
 
 		for ndx, temp := range collectorSmartData.AtaSctTemperatureHistory.Table {
 			//temp value may be null, we must skip/ignore them. See #393
@@ -22,14 +24,16 @@ func (sr *scrutinyRepository) SaveSmartTemperature(ctx context.Context, wwn stri
 				continue
 			}
 
-			minutesOffset := collectorSmartData.AtaSctTemperatureHistory.LoggingIntervalMinutes * int64(ndx) * 60
+			intervalSec := collectorSmartData.AtaSctTemperatureHistory.LoggingIntervalMinutes * 60
+			datapointTime := collectorSmartData.LocalTime.TimeT - int64(ndx)*intervalSec
+			alignedDatapointTime := datapointTime - datapointTime%intervalSec
 			smartTemp := measurements.SmartTemperature{
-				Date: time.Unix(collectorSmartData.LocalTime.TimeT-minutesOffset, 0),
+				Date: time.Unix(alignedDatapointTime, 0),
 				Temp: temp,
 			}
 
 			tags, fields := smartTemp.Flatten()
-			tags["device_wwn"] = wwn
+			tags["scrutiny_uuid"] = scrutiny_uuid.String()
 			p := influxdb2.NewPoint("temp",
 				tags,
 				fields,
@@ -39,29 +43,27 @@ func (sr *scrutinyRepository) SaveSmartTemperature(ctx context.Context, wwn stri
 				return err
 			}
 		}
-		// also add the current temperature.
-	} else {
-
-		smartTemp := measurements.SmartTemperature{
-			Date: time.Unix(collectorSmartData.LocalTime.TimeT, 0),
-			Temp: collectorSmartData.Temperature.Current,
-		}
-
-		tags, fields := smartTemp.Flatten()
-		tags["device_wwn"] = wwn
-		p := influxdb2.NewPoint("temp",
-			tags,
-			fields,
-			smartTemp.Date)
-		return sr.influxWriteApi.WritePoint(ctx, p)
 	}
-	return nil
+
+	// Even if ata_sct_temperature_history is present, also add current temperature. See #824
+	smartTemp := measurements.SmartTemperature{
+		Date: time.Unix(collectorSmartData.LocalTime.TimeT, 0),
+		Temp: collectorSmartData.Temperature.Current,
+	}
+
+	tags, fields := smartTemp.Flatten()
+	tags["scrutiny_uuid"] = scrutiny_uuid.String()
+	p := influxdb2.NewPoint("temp",
+		tags,
+		fields,
+		smartTemp.Date)
+	return sr.influxWriteApi.WritePoint(ctx, p)
 }
 
-func (sr *scrutinyRepository) GetSmartTemperatureHistory(ctx context.Context, durationKey string) (map[string][]measurements.SmartTemperature, error) {
+func (sr *scrutinyRepository) GetSmartTemperatureHistory(ctx context.Context, durationKey string) (map[uuid.UUID][]measurements.SmartTemperature, error) {
 	//we can get temp history for "week", "month", DURATION_KEY_YEAR, "forever"
 
-	deviceTempHistory := map[string][]measurements.SmartTemperature{}
+	deviceTempHistory := map[uuid.UUID][]measurements.SmartTemperature{}
 
 	//TODO: change the query range to a variable.
 	queryStr := sr.aggregateTempQuery(durationKey)
@@ -71,14 +73,15 @@ func (sr *scrutinyRepository) GetSmartTemperatureHistory(ctx context.Context, du
 		// Use Next() to iterate over query result lines
 		for result.Next() {
 
-			if deviceWWN, ok := result.Record().Values()["device_wwn"]; ok {
+			if scrutinyUUIDString, ok := result.Record().Values()["scrutiny_uuid"]; ok {
+				scrutinyUUID := uuid.Must(uuid.FromString(scrutinyUUIDString.(string)))
 
-				//check if deviceWWN has been seen and initialized already
-				if _, ok := deviceTempHistory[deviceWWN.(string)]; !ok {
-					deviceTempHistory[deviceWWN.(string)] = []measurements.SmartTemperature{}
+				//check if scrutinyUUID has been seen and initialized already
+				if _, ok := deviceTempHistory[scrutinyUUID]; !ok {
+					deviceTempHistory[scrutinyUUID] = []measurements.SmartTemperature{}
 				}
 
-				currentTempHistory := deviceTempHistory[deviceWWN.(string)]
+				currentTempHistory := deviceTempHistory[scrutinyUUID]
 				smartTemp := measurements.SmartTemperature{}
 
 				for key, val := range result.Record().Values() {
@@ -86,7 +89,7 @@ func (sr *scrutinyRepository) GetSmartTemperatureHistory(ctx context.Context, du
 				}
 				smartTemp.Date = result.Record().Values()["_time"].(time.Time)
 				currentTempHistory = append(currentTempHistory, smartTemp)
-				deviceTempHistory[deviceWWN.(string)] = currentTempHistory
+				deviceTempHistory[scrutinyUUID] = currentTempHistory
 			}
 		}
 		if result.Err() != nil {
@@ -111,18 +114,18 @@ func (sr *scrutinyRepository) aggregateTempQuery(durationKey string) string {
 		  |> range(start: -1w, stop: now())
 		  |> filter(fn: (r) => r["_measurement"] == "temp" )
 		  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-		  |> group(columns: ["device_wwn"])
+		  |> group(columns: ["scrutiny_uuid"])
 		  |> toInt()
 
 		monthData = from(bucket: "metrics_weekly")
 		  |> range(start: -1mo, stop: now())
 		  |> filter(fn: (r) => r["_measurement"] == "temp" )
 		  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-		  |> group(columns: ["device_wwn"])
+		  |> group(columns: ["scrutiny_uuid"])
 		  |> toInt()
 
 		union(tables: [weekData, monthData])
-		  |> group(columns: ["device_wwn"])
+		  |> group(columns: ["scrutiny_uuid"])
 		  |> sort(columns: ["_time"], desc: false)
 		  |> schema.fieldsAsCols()
 
@@ -138,14 +141,15 @@ func (sr *scrutinyRepository) aggregateTempQuery(durationKey string) string {
 	for _, nestedDurationKey := range nestedDurationKeys {
 		bucketName := sr.lookupBucketName(nestedDurationKey)
 		durationRange := sr.lookupDuration(nestedDurationKey)
+		durationResolution := sr.lookupResolution(nestedDurationKey)
 
 		subQueryNames = append(subQueryNames, fmt.Sprintf(`%sData`, nestedDurationKey))
 		partialQueryStr = append(partialQueryStr, []string{
 			fmt.Sprintf(`%sData = from(bucket: "%s")`, nestedDurationKey, bucketName),
 			fmt.Sprintf(`|> range(start: %s, stop: %s)`, durationRange[0], durationRange[1]),
 			`|> filter(fn: (r) => r["_measurement"] == "temp" )`,
-			`|> aggregateWindow(every: 1h, fn: mean, createEmpty: false)`,
-			`|> group(columns: ["device_wwn"])`,
+			fmt.Sprintf(`|> aggregateWindow(every: %s, fn: mean, createEmpty: false)`, durationResolution),
+			`|> group(columns: ["scrutiny_uuid"])`,
 			`|> toInt()`,
 			"",
 		}...)
@@ -161,7 +165,7 @@ func (sr *scrutinyRepository) aggregateTempQuery(durationKey string) string {
 	} else {
 		partialQueryStr = append(partialQueryStr, []string{
 			fmt.Sprintf("union(tables: [%s])", strings.Join(subQueryNames, ", ")),
-			`|> group(columns: ["device_wwn"])`,
+			`|> group(columns: ["scrutiny_uuid"])`,
 			`|> sort(columns: ["_time"], desc: false)`,
 			"|> schema.fieldsAsCols()",
 		}...)
